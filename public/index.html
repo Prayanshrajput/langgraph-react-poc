@@ -1,0 +1,612 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Frontend Generator</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Inter', system-ui, sans-serif;
+      background: #0f1117;
+      color: #e2e8f0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    header {
+      padding: 14px 24px;
+      border-bottom: 1px solid #1e2433;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .logo {
+      width: 28px; height: 28px;
+      background: linear-gradient(135deg, #6366f1, #a855f7);
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px;
+    }
+    header h1 { font-size: 16px; font-weight: 600; color: #f1f5f9; }
+    .badge { font-size: 11px; color: #818cf8; background: #1e1b3a; border: 1px solid #3730a3; padding: 2px 8px; border-radius: 20px; margin-left: 6px; }
+
+    .layout {
+      display: grid;
+      grid-template-columns: 380px 1fr;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    /* ── Sidebar ── */
+    .sidebar {
+      display: flex; flex-direction: column;
+      border-right: 1px solid #1e2433;
+      overflow: hidden;
+      background: #0d1018;
+    }
+
+    .sidebar-scroll { flex: 1; overflow-y: auto; padding: 18px; display: flex; flex-direction: column; gap: 14px; }
+
+    .slabel { font-size: 10.5px; font-weight: 600; color: #475569; text-transform: uppercase; letter-spacing: .07em; display: block; margin-bottom: 6px; }
+
+    textarea {
+      width: 100%; height: 160px;
+      background: #1a1f2e; border: 1px solid #2d3448; border-radius: 9px;
+      color: #e2e8f0; font-family: 'Inter', sans-serif; font-size: 13px; line-height: 1.6;
+      padding: 11px; resize: vertical; outline: none; transition: border-color .2s;
+    }
+    textarea:focus { border-color: #6366f1; }
+    textarea::placeholder { color: #475569; }
+
+    .examples { display: flex; flex-direction: column; gap: 4px; }
+    .example-btn {
+      background: #1a1f2e; border: 1px solid #2d3448; border-radius: 7px;
+      padding: 8px 11px; color: #64748b; font-size: 12px; cursor: pointer;
+      text-align: left; line-height: 1.4; transition: all .15s;
+    }
+    .example-btn:hover { border-color: #6366f1; color: #c4b5fd; background: #1e1b3a; }
+
+    .gen-btn {
+      width: 100%; padding: 12px;
+      background: linear-gradient(135deg, #6366f1, #a855f7);
+      color: white; border: none; border-radius: 9px;
+      font-size: 13.5px; font-weight: 600; cursor: pointer;
+      transition: opacity .2s, transform .1s;
+    }
+    .gen-btn:hover:not(:disabled) { opacity: .9; transform: translateY(-1px); }
+    .gen-btn:disabled { opacity: .45; cursor: not-allowed; transform: none; }
+
+    .status {
+      background: #1a1f2e; border: 1px solid #2d3448; border-radius: 8px;
+      padding: 10px 12px; font-size: 12px; color: #94a3b8;
+      display: flex; align-items: flex-start; gap: 8px; min-height: 40px;
+    }
+    .status.error  { border-color: #ef4444; color: #fca5a5; background: #1f0e0e; }
+    .status.ok     { border-color: #22c55e; color: #86efac; background: #0d1a0f; }
+
+    .spinner { width: 12px; height: 12px; border: 2px solid #4f46e5; border-top-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; flex-shrink: 0; margin-top: 1px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    .divider { height: 1px; background: #1e2433; }
+
+    /* ── Running projects ── */
+    .project-card {
+      background: #1a1f2e; border: 1px solid #2d3448; border-radius: 9px;
+      overflow: hidden; transition: border-color .15s;
+    }
+    .project-card.active { border-color: #6366f1; }
+    .project-header {
+      display: flex; align-items: center; gap: 8px;
+      padding: 10px 12px; cursor: pointer;
+    }
+    .project-header:hover { background: #1e2433; }
+    .port-badge { font-size: 11px; background: #1e1b3a; color: #818cf8; border: 1px solid #3730a3; border-radius: 5px; padding: 1px 7px; font-family: 'JetBrains Mono', monospace; }
+    .project-name { font-size: 12px; color: #94a3b8; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .stop-btn, .start-btn { font-size: 11px; background: none; border: none; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
+    .stop-btn  { color: #475569; }
+    .stop-btn:hover  { color: #ef4444; background: #1f0e0e; }
+    .start-btn { color: #22c55e; }
+    .start-btn:hover { background: #0d1a0f; }
+    .port-badge.stopped { color: #64748b; border-color: #334155; background: #1a1f2e; }
+
+    .file-tree { padding: 0 12px 10px; }
+    .file-item {
+      display: flex; align-items: center; gap: 6px;
+      padding: 3px 4px; border-radius: 4px; cursor: pointer;
+      font-size: 11.5px; color: #64748b; font-family: 'JetBrains Mono', monospace;
+      transition: all .12s; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    }
+    .file-item:hover { background: #1e2433; color: #a5b4fc; }
+    .file-icon { font-size: 10px; flex-shrink: 0; }
+
+    /* ── Preview ── */
+    .preview-pane { display: flex; flex-direction: column; background: #fff; overflow: hidden; }
+
+    .preview-bar {
+      background: #1a1f2e; border-bottom: 1px solid #1e2433;
+      padding: 8px 14px; display: flex; align-items: center; gap: 8px;
+      font-size: 12px; color: #64748b; flex-shrink: 0;
+    }
+    .dot { width: 9px; height: 9px; border-radius: 50%; }
+    .addr-bar {
+      flex: 1; background: #0d1018; border: 1px solid #2d3448;
+      border-radius: 5px; padding: 4px 9px; color: #94a3b8;
+      font-size: 11px; font-family: 'JetBrains Mono', monospace;
+      overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    .bar-btn {
+      padding: 3px 9px; border-radius: 5px; border: 1px solid #2d3448;
+      font-size: 11px; cursor: pointer; background: none; color: #64748b;
+      transition: all .12s; white-space: nowrap;
+    }
+    .bar-btn:hover { border-color: #6366f1; color: #a5b4fc; }
+    .bar-btn.tab-active { border-color: #6366f1; color: #a5b4fc; background: #1e1b3a; }
+
+    #preview-frame { flex: 1; border: none; width: 100%; display: none; }
+
+    .code-pane { flex: 1; overflow: auto; display: none; background: #0d1018; padding: 16px; }
+    pre { font-family: 'JetBrains Mono', monospace; font-size: 12px; line-height: 1.7; color: #e2e8f0; white-space: pre-wrap; word-break: break-all; }
+
+    .placeholder {
+      flex: 1; display: flex; flex-direction: column;
+      align-items: center; justify-content: center;
+      gap: 12px; background: #f1f5f9; color: #94a3b8; font-size: 14px;
+    }
+    .placeholder .icon { font-size: 40px; opacity: .3; }
+    .placeholder small { font-size: 12px; color: #cbd5e1; }
+
+    /* ── Update bar ── */
+    .update-bar {
+      flex-shrink: 0; display: flex; align-items: center; gap: 8px;
+      padding: 10px 14px; background: #1a1f2e; border-top: 1px solid #1e2433;
+    }
+    .update-bar input {
+      flex: 1; background: #0d1018; border: 1px solid #2d3448; border-radius: 8px;
+      color: #e2e8f0; font-family: 'Inter', sans-serif; font-size: 13px;
+      padding: 9px 12px; outline: none; transition: border-color .2s;
+    }
+    .update-bar input:focus { border-color: #6366f1; }
+    .update-bar input::placeholder { color: #475569; }
+    .update-bar input:disabled { opacity: .5; }
+    #update-btn {
+      padding: 9px 16px; border: none; border-radius: 8px; cursor: pointer;
+      font-size: 13px; font-weight: 600; color: #fff; white-space: nowrap;
+      background: linear-gradient(135deg, #6366f1, #a855f7); transition: opacity .2s;
+    }
+    #update-btn:hover:not(:disabled) { opacity: .9; }
+    #update-btn:disabled { opacity: .5; cursor: not-allowed; }
+    .update-status { font-size: 11.5px; color: #64748b; white-space: nowrap; max-width: 260px; overflow: hidden; text-overflow: ellipsis; }
+    .update-status.ok { color: #86efac; }
+    .update-status.error { color: #fca5a5; }
+
+    /* ── Token stats panel ── */
+    .token-panel {
+      flex-shrink: 0; background: #0d1018; border-top: 1px solid #1e2433;
+      padding: 8px 14px; display: none; gap: 0;
+      flex-direction: column;
+    }
+    .token-panel.visible { display: flex; }
+    .token-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; padding: 3px 0; }
+    .token-row + .token-row { border-top: 1px solid #1e2433; margin-top: 3px; padding-top: 6px; }
+    .token-label { font-size: 10px; font-weight: 600; color: #475569; text-transform: uppercase; letter-spacing: .06em; min-width: 54px; }
+    .tstat { font-size: 11.5px; font-family: 'JetBrains Mono', monospace; }
+    .tstat .k { color: #64748b; margin-right: 3px; font-size: 10px; }
+    .tstat.in  { color: #60a5fa; }
+    .tstat.out { color: #a78bfa; }
+    .tstat.cost { color: #34d399; }
+    .tstat.time { color: #fb923c; }
+    .tstat.sess { color: #94a3b8; }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="logo">⚛</div>
+    <h1>AI Frontend Generator</h1>
+    <span class="badge">Vite · React TSX · Claude Sonnet 4.6</span>
+  </header>
+
+  <div class="layout">
+    <!-- ── Sidebar ── -->
+    <aside class="sidebar">
+      <div class="sidebar-scroll">
+        <div>
+          <label class="slabel">Describe your app</label>
+          <textarea id="req"
+            placeholder="e.g. An e-commerce dashboard with product listing, category filters, a shopping cart sidebar, and an order history table with 10 realistic products..."
+          ></textarea>
+        </div>
+
+        <div class="examples">
+          <label class="slabel">Quick examples</label>
+          <button class="example-btn" onclick="setEx(this)">Kanban board with swimlane columns, task cards with priority labels, assignee avatars, and a create-task modal</button>
+          <button class="example-btn" onclick="setEx(this)">Analytics dashboard with revenue KPI cards, a bar chart of monthly sales, user growth line chart, and a recent orders table</button>
+          <button class="example-btn" onclick="setEx(this)">Social media feed with post cards, like/comment/share buttons, stories row, trending hashtags sidebar, and profile card</button>
+          <button class="example-btn" onclick="setEx(this)">Job board with job listing cards, filter sidebar by role/location/salary, applicant tracking modal, and saved jobs tab</button>
+        </div>
+
+        <button class="gen-btn" id="gen-btn" onclick="generate()">Generate React Project  (Ctrl+↵)</button>
+
+        <div class="status" id="status">Enter your requirements and click Generate.</div>
+
+        <div class="divider"></div>
+
+        <div>
+          <label class="slabel">Running projects</label>
+          <div id="projects-list" style="display:flex;flex-direction:column;gap:8px"></div>
+        </div>
+      </div>
+    </aside>
+
+    <!-- ── Preview ── -->
+    <div class="preview-pane">
+      <div class="preview-bar">
+        <div class="dot" style="background:#ef4444"></div>
+        <div class="dot" style="background:#f59e0b"></div>
+        <div class="dot" style="background:#22c55e"></div>
+        <div class="addr-bar" id="addr-bar">about:blank</div>
+        <button class="bar-btn tab-active" id="tab-preview" onclick="showTab('preview')">Preview</button>
+        <button class="bar-btn" id="tab-code" onclick="showTab('code')">Source</button>
+        <button class="bar-btn" id="open-tab-btn" onclick="openTab()" style="display:none">Open ↗</button>
+      </div>
+
+      <div class="placeholder" id="placeholder">
+        <div class="icon">⚛️</div>
+        <div>Your React app will run here</div>
+        <small>Each project gets its own Vite dev server</small>
+      </div>
+      <iframe id="preview-frame" allow="cross-origin-isolated"></iframe>
+      <div class="code-pane" id="code-pane">
+        <pre id="code-content">Select a file from the sidebar to view its source.</pre>
+      </div>
+
+      <!-- ── Token stats ── -->
+      <div class="token-panel" id="token-panel"></div>
+
+      <!-- ── Update bar (only when a project is active) ── -->
+      <div class="update-bar" id="update-bar" style="display:none">
+        <input id="update-input" type="text"
+          placeholder="Describe a change — e.g. 'add a dark mode toggle in the header'  (only changed files are rewritten)" />
+        <button id="update-btn" onclick="sendUpdate()">Update ↵</button>
+        <span class="update-status" id="update-status"></span>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let currentProject = null;
+    let currentPreviewUrl = null;
+
+    const $ = (id) => document.getElementById(id);
+
+    function setEx(btn) { $('req').value = btn.textContent.trim(); }
+
+    function setStatus(msg, type = '') {
+      const el = $('status');
+      el.className = 'status' + (type ? ' ' + type : '');
+      el.innerHTML = type === 'loading'
+        ? `<div class="spinner"></div><span>${msg}</span>`
+        : msg;
+    }
+
+    function showTab(tab) {
+      const frame = $('preview-frame');
+      const code  = $('code-pane');
+      if (tab === 'preview') {
+        frame.style.display = 'block';
+        code.style.display  = 'none';
+        $('tab-preview').classList.add('tab-active');
+        $('tab-code').classList.remove('tab-active');
+      } else {
+        frame.style.display = 'none';
+        code.style.display  = 'block';
+        $('tab-preview').classList.remove('tab-active');
+        $('tab-code').classList.add('tab-active');
+      }
+    }
+
+    function openTab() {
+      if (currentPreviewUrl) window.open(currentPreviewUrl, '_blank');
+    }
+
+    function loadPreview(url, projectId) {
+      currentPreviewUrl = url;
+      currentProject   = projectId;
+      $('placeholder').style.display  = 'none';
+      $('preview-frame').style.display = 'block';
+      $('preview-frame').src = url;
+      $('addr-bar').textContent = url;
+      $('open-tab-btn').style.display = 'block';
+      $('code-content').textContent = 'Select a file from the sidebar to view its source.';
+      $('update-bar').style.display = 'flex';
+      $('update-status').textContent = '';
+      showTab('preview');
+    }
+
+    async function sendUpdate() {
+      const instruction = $('update-input').value.trim();
+      if (!instruction) return;
+      if (!currentProject) { setUpdateStatus('Select a running project first.', 'error'); return; }
+
+      const input = $('update-input'), btn = $('update-btn');
+      input.disabled = true; btn.disabled = true;
+      setUpdateStatus('Analyzing…');
+
+      try {
+        const response = await fetch(`/projects/${currentProject}/update`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ instruction }),
+        });
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.error)  setUpdateStatus('Error: ' + data.error, 'error');
+              else if (data.status) setUpdateStatus(data.status);
+              else if (data.done) {
+                setUpdateStatus(`✓ ${data.changed.length} file(s): ${data.changed.join(', ')}`, 'ok');
+                showTokens(data.tokens);
+                input.value = '';
+                setTimeout(() => { $('preview-frame').src = currentPreviewUrl; }, 600);
+                loadProjects();
+              }
+            } catch {}
+          }
+        }
+      } catch (err) {
+        setUpdateStatus('Failed: ' + err.message, 'error');
+      } finally {
+        input.disabled = false; btn.disabled = false;
+        input.focus();
+      }
+    }
+
+    function setUpdateStatus(msg, type = '') {
+      const el = $('update-status');
+      el.className = 'update-status' + (type ? ' ' + type : '');
+      el.textContent = msg;
+    }
+
+    function fmt(n)    { return n.toLocaleString(); }
+    function fmtMs(ms) { return ms >= 1000 ? (ms/1000).toFixed(1)+'s' : ms+'ms'; }
+    function fmtCost(c){ return c < 0.001 ? '<$0.001' : '$'+c.toFixed(4); }
+
+    function stat(label, val, cls) {
+      return `<span class="tstat ${cls}"><span class="k">${label}</span>${val}</span>`;
+    }
+
+    function showTokens(tokens) {
+      const panel = $('token-panel');
+      if (!tokens) { panel.className = 'token-panel'; return; }
+
+      let html = '';
+
+      // If update (has .select / .edit / .total), show two-phase breakdown
+      if (tokens.select) {
+        html += `<div class="token-row">
+          <span class="token-label">Phase 1</span>
+          ${stat('in ',  fmt(tokens.select.input),  'in')}
+          ${stat('out ', fmt(tokens.select.output), 'out')}
+          ${stat('cost ', fmtCost(tokens.select.cost), 'cost')}
+          ${stat('time ', fmtMs(tokens.select.ms), 'time')}
+        </div>`;
+        html += `<div class="token-row">
+          <span class="token-label">Phase 2</span>
+          ${stat('in ',  fmt(tokens.edit.input),  'in')}
+          ${stat('out ', fmt(tokens.edit.output), 'out')}
+          ${stat('cost ', fmtCost(tokens.edit.cost), 'cost')}
+          ${stat('time ', fmtMs(tokens.edit.ms), 'time')}
+        </div>`;
+        html += `<div class="token-row">
+          <span class="token-label">Update</span>
+          ${stat('in ',  fmt(tokens.total.input),  'in')}
+          ${stat('out ', fmt(tokens.total.output), 'out')}
+          ${stat('cost ', fmtCost(tokens.total.cost), 'cost')}
+          ${stat('time ', fmtMs(tokens.total.ms), 'time')}
+        </div>`;
+      } else {
+        // Generate — single call
+        html += `<div class="token-row">
+          <span class="token-label">Generate</span>
+          ${stat('in ',  fmt(tokens.input),  'in')}
+          ${stat('out ', fmt(tokens.output), 'out')}
+          ${stat('cost ', fmtCost(tokens.cost), 'cost')}
+          ${stat('time ', fmtMs(tokens.ms), 'time')}
+        </div>`;
+      }
+
+      // Session totals
+      if (tokens.session) {
+        const s = tokens.session;
+        html += `<div class="token-row">
+          <span class="token-label">Session</span>
+          ${stat('in ',  fmt(s.input),  'in sess')}
+          ${stat('out ', fmt(s.output), 'out sess')}
+          ${stat('cost ', fmtCost(s.cost), 'cost sess')}
+          ${stat('calls ', s.calls, 'time sess')}
+        </div>`;
+      }
+
+      panel.innerHTML = html;
+      panel.className = 'token-panel visible';
+    }
+
+    async function loadFileSource(projectId, filePath) {
+      $('code-content').textContent = 'Loading...';
+      showTab('code');
+      try {
+        const text = await fetch(`/projects/${projectId}/file?path=${encodeURIComponent(filePath)}`).then(r => r.text());
+        $('code-content').textContent = text;
+      } catch {
+        $('code-content').textContent = 'Could not load file.';
+      }
+    }
+
+    function fileIcon(p) {
+      if (p.endsWith('.tsx')) return '⚛';
+      if (p.endsWith('.ts'))  return '📘';
+      if (p.endsWith('.css')) return '🎨';
+      return '📄';
+    }
+
+    function renderProjectCard(proj, isNew = false) {
+      // Update existing card if already rendered
+      const existing = document.querySelector(`[data-pid="${proj.id}"]`);
+      if (existing) {
+        existing.classList.toggle('active', proj.id === currentProject);
+        // Refresh inner HTML to reflect running state change
+        existing.replaceWith(buildCard(proj, proj.id === currentProject));
+        return;
+      }
+      $('projects-list').prepend(buildCard(proj, isNew));
+    }
+
+    function buildCard(proj, isActive) {
+      const card = document.createElement('div');
+      card.className = 'project-card' + (isActive ? ' active' : '');
+      card.dataset.pid = proj.id;
+      const ts = new Date(proj.createdAt).toLocaleTimeString();
+
+      const headerAction = proj.running
+        ? `<button class="stop-btn" onclick="stopProject(event,'${proj.id}')">✕ stop</button>`
+        : `<button class="start-btn" onclick="startProject(event,'${proj.id}')">▶ start</button>`;
+
+      const portBadge = proj.running
+        ? `<span class="port-badge">:${proj.port}</span>`
+        : `<span class="port-badge stopped">stopped</span>`;
+
+      const headerClick = proj.running
+        ? `onclick="toggleCard('${proj.id}','${proj.previewUrl}')"`
+        : '';
+
+      card.innerHTML = `
+        <div class="project-header" ${headerClick}>
+          ${portBadge}
+          <span class="project-name">${ts}</span>
+          ${headerAction}
+        </div>
+        <div class="file-tree" id="tree-${proj.id}">
+          ${proj.files.map(f => `
+            <div class="file-item" onclick="loadFileSource('${proj.id}','${f}')" title="${f}">
+              <span class="file-icon">${fileIcon(f)}</span>${f}
+            </div>`).join('')}
+        </div>`;
+      return card;
+    }
+
+    function toggleCard(projectId, url) {
+      if (!url) return;
+      loadPreview(url, projectId);
+      document.querySelectorAll('.project-card').forEach(c => {
+        c.classList.toggle('active', c.dataset.pid === projectId);
+      });
+    }
+
+    async function startProject(e, projectId) {
+      e.stopPropagation();
+      const card = document.querySelector(`[data-pid="${projectId}"]`);
+      if (card) card.querySelector('.start-btn').textContent = '…';
+      try {
+        const data = await fetch(`/projects/${projectId}/start`, { method: 'POST' }).then(r => r.json());
+        if (data.error) { alert(data.error); return; }
+        await loadProjects();
+        loadPreview(data.previewUrl, projectId);
+      } catch (err) { alert('Start failed: ' + err.message); }
+    }
+
+    async function stopProject(e, projectId) {
+      e.stopPropagation();
+      await fetch(`/projects/${projectId}`, { method: 'DELETE' });
+      if (currentProject === projectId) {
+        $('placeholder').style.display = 'flex';
+        $('preview-frame').style.display = 'none';
+        $('open-tab-btn').style.display = 'none';
+        currentProject = null; currentPreviewUrl = null;
+      }
+      await loadProjects();
+    }
+
+    async function generate() {
+      const req = $('req').value.trim();
+      if (!req) { setStatus('Please enter your requirements.', 'error'); return; }
+
+      const btn = $('gen-btn');
+      btn.disabled = true;
+      setStatus('Connecting to Claude...', 'loading');
+
+      try {
+        const response = await fetch('/generate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ requirements: req }),
+        });
+
+        const reader  = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.error)  { setStatus('Error: ' + data.error, 'error'); }
+              else if (data.status) { setStatus(data.status, 'loading'); }
+              else if (data.done) {
+                setStatus(`Done! ${data.files.length} files generated`, 'ok');
+                renderProjectCard({ ...data, running: true }, true);
+                loadPreview(data.previewUrl, data.projectId);
+                showTokens(data.tokens);
+              }
+            } catch {}
+          }
+        }
+      } catch (err) {
+        setStatus('Request failed: ' + err.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    async function loadProjects() {
+      try {
+        const list = await fetch('/projects').then(r => r.json());
+        $('projects-list').innerHTML = '';
+        list.forEach(p => renderProjectCard(p, false));
+      } catch {}
+    }
+
+    $('req').addEventListener('keydown', e => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') generate();
+    });
+
+    $('update-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') sendUpdate();
+    });
+
+    loadProjects();
+  </script>
+</body>
+</html>

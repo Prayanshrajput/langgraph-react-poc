@@ -1,0 +1,15 @@
+# Dependencies
+node_modules/
+
+# Generated React projects (can be large, rebuild on demand)
+generated/
+
+# Logs
+logs/
+
+# Environment variables (contains API keys — never commit)
+.env
+
+# OS
+.DS_Store
+Thumbs.db
