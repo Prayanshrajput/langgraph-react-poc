@@ -1,13 +1,12 @@
 import express from 'express';
 import Anthropic from '@anthropic-ai/sdk';
 import { spawn } from 'child_process';
-import { createConnection } from 'net';
-import http from 'http';
 import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { logAICall, logStep, getCallLog, ensureLogDir, LOG_FILE } from './logger.js';
+import { pushToGitHub, createGitHubRepo, deployToCloudflarePages } from './deployer.js';
 
 dotenv.config();
 
@@ -19,9 +18,7 @@ const isWin = process.platform === 'win32';
 const GENERATED_DIR = path.join(__dirname, 'generated');
 const BASE_DIR = path.join(GENERATED_DIR, 'base');
 
-// All known projects (running + stopped)
 const projects = new Map();
-let nextPort = 5173;
 
 // ─── Base Vite template (one-time install) ────────────────────────────────────
 
@@ -48,31 +45,6 @@ const BASE_FILES = {
   }, null, 2),
 };
 
-// Project-specific files (base stays generic)
-const INDEX_HTML = `<!DOCTYPE html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <script src="https://cdn.tailwindcss.com"></script>
-    <title>Preview</title>
-  </head>
-  <body class="m-0">
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>`;
-
-function viteConfig(projectId) {
-  return `import { defineConfig } from 'vite'
-import react from '@vitejs/plugin-react'
-export default defineConfig({
-  plugins: [react()],
-  base: '/live/${projectId}/',
-  server: { strictPort: true },
-})
-`;
-}
 
 // Fixed files — identical every project, so we never spend AI tokens generating them.
 const MAIN_TSX = `import React from 'react'
@@ -172,63 +144,61 @@ async function ensureJunction(projectDir) {
   }
 }
 
-function waitForPort(port) {
-  return new Promise((resolve, reject) => {
-    const deadline = Date.now() + 45_000;
-    const poll = () => {
-      if (Date.now() > deadline) return reject(new Error(`Vite on :${port} timed out after 45s`));
-      const sock = createConnection(port, '127.0.0.1');
-      sock.once('connect', () => { sock.destroy(); resolve(); });
-      sock.once('error', () => { sock.destroy(); setTimeout(poll, 800); });
-    };
-    setTimeout(poll, 1500);
-  });
-}
 
-async function spawnVite(projectId) {
+// ─── esbuild preview ──────────────────────────────────────────────────────────
+// Bundles in 1-3s, outputs static dist/ — zero running processes, zero RAM overhead.
+
+const PREVIEW_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <script src="https://cdn.tailwindcss.com"></script>
+  <link rel="stylesheet" href="bundle.css" />
+  <title>Preview</title>
+</head>
+<body class="m-0">
+  <div id="root"></div>
+  <script type="module" src="bundle.js"></script>
+</body>
+</html>`;
+
+async function buildWithEsbuild(projectId) {
   const proj = projects.get(projectId);
   if (!proj) throw new Error('Project not found: ' + projectId);
 
+  // Ensure node_modules symlink exists so esbuild can resolve react, react-dom, etc.
   await ensureJunction(proj.dir);
 
-  // Always write correct vite config with base path (fixes existing + new projects)
-  await fs.writeFile(path.join(proj.dir, 'vite.config.ts'), viteConfig(projectId), 'utf-8');
-  // index.html without base in script src — Vite rewrites it based on base config
-  await fs.writeFile(path.join(proj.dir, 'index.html'), INDEX_HTML, 'utf-8');
-
-  // Remove any AI-generated PostCSS / Tailwind npm config files.
-  // We use Tailwind via CDN so these are not only unnecessary but crash Vite
-  // because tailwindcss is not in node_modules.
+  // Remove AI-generated config files that would conflict
   for (const bad of ['postcss.config.js', 'postcss.config.cjs', 'tailwind.config.js', 'tailwind.config.ts']) {
-    try { await fs.unlink(path.join(proj.dir, bad)); } catch { /* already absent */ }
+    try { await fs.unlink(path.join(proj.dir, bad)); } catch {}
   }
 
-  const port = nextPort++;
-  const viteJs = path.join(BASE_DIR, 'node_modules', 'vite', 'bin', 'vite.js');
+  const distDir = path.join(proj.dir, 'dist');
+  await fs.mkdir(distDir, { recursive: true });
+  await fs.writeFile(path.join(distDir, 'index.html'), PREVIEW_HTML, 'utf-8');
 
-  // --host 127.0.0.1 forces IPv4 binding. On Windows, default 'localhost' binds to
-  // IPv6 ::1, but the proxy + health-check connect via IPv4 127.0.0.1 — they'd never meet.
-  const proc = spawn(process.execPath, [viteJs, '--port', String(port), '--host', '127.0.0.1'], {
-    cwd: proj.dir,
-    stdio: ['ignore', 'pipe', 'pipe'],
-    env: { ...process.env, FORCE_COLOR: '0', NO_COLOR: '1' },
+  const t0 = Date.now();
+  logStep('esbuild', projectId, 'bundling…', null);
+
+  const esbuild = await import('esbuild');
+  await esbuild.build({
+    entryPoints: [path.join(proj.dir, 'src/main.tsx')],
+    bundle: true,
+    outfile: path.join(distDir, 'bundle.js'),
+    format: 'esm',
+    jsx: 'automatic',
+    loader: { '.tsx': 'tsx', '.ts': 'ts', '.jsx': 'jsx', '.js': 'js', '.css': 'css', '.svg': 'dataurl', '.png': 'dataurl', '.jpg': 'dataurl' },
+    define: { 'process.env.NODE_ENV': '"production"' },
+    platform: 'browser',
+    minify: false,
+    logLevel: 'error',
   });
 
-  proc.stdout.on('data', (d) => process.stdout.write(`[vite:${port}] ${d}`));
-  proc.stderr.on('data', (d) => process.stderr.write(`[vite:${port}] ${d}`));
-  proc.on('error', (err) => console.error(`[vite:${port}] error:`, err));
-  proc.on('exit', (code) => {
-    logStep('vite', projectId, `exited (code=${code})`, null);
-    if (projects.has(projectId)) Object.assign(projects.get(projectId), { running: false, port: null, process: null });
-  });
-
-  logStep('vite', projectId, `waiting for port ${port}…`, null);
-  const viteT0 = Date.now();
-  await waitForPort(port);
-  logStep('vite', projectId, `ready on :${port}`, Date.now() - viteT0);
-
-  Object.assign(proj, { running: true, port, process: proc });
-  return port;
+  logStep('esbuild', projectId, 'bundle ready', Date.now() - t0);
+  Object.assign(proj, { built: true });
+  return `/preview/${projectId}/`;
 }
 
 async function scanExistingProjects() {
@@ -238,53 +208,17 @@ async function scanExistingProjects() {
       const projectDir = path.join(GENERATED_DIR, e.name);
       const stamp = parseInt(e.name.replace('project-', ''), 10);
       const files = await getSrcFiles(projectDir);
-      projects.set(e.name, { id: e.name, dir: projectDir, files, createdAt: isNaN(stamp) ? 0 : stamp, running: false, port: null, process: null });
+
+      // Check if dist/ was already built before the restart
+      let built = false;
+      try { await fs.access(path.join(projectDir, 'dist', 'bundle.js')); built = true; } catch {}
+
+      projects.set(e.name, { id: e.name, dir: projectDir, files, createdAt: isNaN(stamp) ? 0 : stamp, built });
     }
     console.log(`[scan] ${projects.size} project(s) found.`);
   } catch {}
 }
 
-// ─── HTTP Proxy for /live/:projectId/* ────────────────────────────────────────
-// Proxies requests through main server so Vite preview works in the iframe
-// without cross-origin issues.
-
-function proxyToVite(req, res) {
-  // Express strips /live → req.url = '/project-id/rest/of/path'
-  const withoutSlash = req.url.slice(1); // 'project-id/rest'
-  const sep = withoutSlash.indexOf('/');
-  const projectId = sep === -1 ? withoutSlash.split('?')[0] : withoutSlash.slice(0, sep);
-
-  const proj = projects.get(projectId);
-  if (!proj?.running) {
-    return res.status(404).type('html').send(`
-      <html><body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#0f1117;color:#64748b">
-        <div style="text-align:center">
-          <div style="font-size:32px;margin-bottom:12px">⏸</div>
-          <div style="font-size:15px">Project is stopped.</div>
-          <div style="font-size:12px;margin-top:6px">Click ▶ start in the sidebar.</div>
-        </div>
-      </body></html>`);
-  }
-
-  // Vite's base is '/live/project-id/' so it expects the FULL path including that prefix.
-  // Reconstruct it: /live + req.url  (e.g. /live/project-id/src/main.tsx)
-  const targetPath = '/live' + req.url;
-
-  const opts = {
-    hostname: '127.0.0.1',
-    port: proj.port,
-    path: targetPath,
-    method: req.method,
-    headers: { ...req.headers, host: `127.0.0.1:${proj.port}` },
-  };
-
-  const proxyReq = http.request(opts, (proxyRes) => {
-    res.writeHead(proxyRes.statusCode, proxyRes.headers);
-    proxyRes.pipe(res);
-  });
-  proxyReq.on('error', () => { if (!res.headersSent) res.status(502).send('Vite unreachable'); });
-  req.pipe(proxyReq);
-}
 
 // ─── Claude prompt ────────────────────────────────────────────────────────────
 
@@ -382,8 +316,12 @@ function sessionSnapshot() {
 app.use(express.json());
 app.use(express.static('public'));
 
-// Proxy live Vite previews through the main server
-app.use('/live', proxyToVite);
+// Serve esbuild dist/ output for each project
+app.use('/preview/:projectId/', (req, res, next) => {
+  const proj = projects.get(req.params.projectId);
+  if (!proj?.built) return res.status(404).send('Project not built yet.');
+  express.static(path.join(proj.dir, 'dist'))(req, res, next);
+});
 
 app.post('/generate', async (req, res) => {
   const { requirements } = req.body;
@@ -484,13 +422,12 @@ app.post('/generate', async (req, res) => {
     projects.set(projectId, {
       id: projectId, dir: projectDir,
       files: allFiles,
-      createdAt: stamp, running: false, port: null, process: null,
+      createdAt: stamp, built: false,
     });
 
-    send({ status: 'Starting Vite dev server...' });
-    await spawnVite(projectId);
+    send({ status: 'Bundling with esbuild...' });
+    const previewUrl = await buildWithEsbuild(projectId);
 
-    const previewUrl = `/live/${projectId}/`;
     send({ done: true, projectId, previewUrl, files: allFiles, tokens: { ...genUsage, ms: genMs, session: sessionSnapshot() } });
     res.end();
   } catch (err) {
@@ -503,19 +440,21 @@ app.post('/generate', async (req, res) => {
 app.get('/projects', (_req, res) => {
   const list = [...projects.values()].map((p) => ({
     id: p.id, files: p.files, createdAt: p.createdAt,
-    running: p.running, port: p.port,
-    previewUrl: p.running ? `/live/${p.id}/` : null,
+    built: p.built,
+    previewUrl: p.built ? `/preview/${p.id}/` : null,
+    deployedUrl: p.deployedUrl || null,
+    githubUrl: p.githubUrl || null,
   }));
   res.json(list.sort((a, b) => b.createdAt - a.createdAt));
 });
 
+// Rebuild preview (re-run esbuild after manual file edits)
 app.post('/projects/:id/start', async (req, res) => {
   const proj = projects.get(req.params.id);
   if (!proj) return res.status(404).json({ error: 'Project not found.' });
-  if (proj.running) return res.json({ previewUrl: `/live/${proj.id}/` });
   try {
-    await spawnVite(req.params.id);
-    res.json({ previewUrl: `/live/${req.params.id}/` });
+    const previewUrl = await buildWithEsbuild(req.params.id);
+    res.json({ previewUrl });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -524,8 +463,7 @@ app.post('/projects/:id/start', async (req, res) => {
 app.delete('/projects/:id', (req, res) => {
   const proj = projects.get(req.params.id);
   if (!proj) return res.status(404).json({ error: 'Not found.' });
-  if (proj.process) proj.process.kill();
-  Object.assign(proj, { running: false, port: null, process: null });
+  projects.delete(req.params.id);
   res.json({ ok: true });
 });
 
@@ -685,6 +623,10 @@ app.post('/projects/:id/update', async (req, res) => {
       await fs.writeFile(dest, file.content, 'utf-8');
     }
 
+    // ── Rebuild preview bundle ───────────────────────────────────────────────
+    send({ status: 'Rebuilding preview...' });
+    await buildWithEsbuild(req.params.id);
+
     // ── Refresh manifest ─────────────────────────────────────────────────────
     const mfMap = new Map(manifest.files.map((f) => [f.path, f.description]));
     for (const f of changed) mfMap.set(f.path, f.description || mfMap.get(f.path) || '');
@@ -745,6 +687,39 @@ app.get('/projects/:id/file', async (req, res) => {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.send(content);
   } catch { res.status(404).send('File not found'); }
+});
+
+// ─── Deploy endpoint ──────────────────────────────────────────────────────────
+// Pushes source to GitHub then deploys dist/ to Cloudflare Pages.
+
+app.post('/projects/:id/deploy', async (req, res) => {
+  const proj = projects.get(req.params.id);
+  if (!proj) return res.status(404).json({ error: 'Project not found.' });
+  if (!proj.built) return res.status(400).json({ error: 'Build the preview first.' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  try {
+    send({ status: 'Creating GitHub repository...' });
+    const { cloneUrl, htmlUrl, fullName } = await createGitHubRepo(req.params.id);
+
+    send({ status: 'Pushing source files to GitHub...' });
+    await pushToGitHub(proj.dir, cloneUrl, req.params.id);
+
+    send({ status: 'Deploying to Cloudflare Pages...' });
+    const deployedUrl = await deployToCloudflarePages(path.join(proj.dir, 'dist'), req.params.id, fullName);
+
+    Object.assign(proj, { deployedUrl, githubUrl: htmlUrl });
+    send({ done: true, deployedUrl, githubUrl: htmlUrl });
+    res.end();
+  } catch (err) {
+    console.error('[deploy] error:', err);
+    send({ error: err.message || 'Deploy failed.' });
+    res.end();
+  }
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────

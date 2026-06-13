@@ -108,12 +108,11 @@
     .project-header:hover { background: #1e2433; }
     .port-badge { font-size: 11px; background: #1e1b3a; color: #818cf8; border: 1px solid #3730a3; border-radius: 5px; padding: 1px 7px; font-family: 'JetBrains Mono', monospace; }
     .project-name { font-size: 12px; color: #94a3b8; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .stop-btn, .start-btn { font-size: 11px; background: none; border: none; cursor: pointer; padding: 2px 6px; border-radius: 4px; }
-    .stop-btn  { color: #475569; }
-    .stop-btn:hover  { color: #ef4444; background: #1f0e0e; }
-    .start-btn { color: #22c55e; }
-    .start-btn:hover { background: #0d1a0f; }
-    .port-badge.stopped { color: #64748b; border-color: #334155; background: #1a1f2e; }
+    .deploy-btn { font-size: 11px; background: none; border: 1px solid #16a34a; color: #4ade80; cursor: pointer; padding: 2px 8px; border-radius: 4px; }
+    .deploy-btn:hover { background: #0d1a0f; }
+    .deploy-btn:disabled { opacity: .4; cursor: not-allowed; }
+    .built-badge { font-size: 11px; background: #0d1a0f; color: #4ade80; border: 1px solid #16a34a; border-radius: 5px; padding: 1px 7px; }
+    .building-badge { font-size: 11px; background: #1a1f2e; color: #94a3b8; border: 1px solid #334155; border-radius: 5px; padding: 1px 7px; }
 
     .file-tree { padding: 0 12px 10px; }
     .file-item {
@@ -208,7 +207,7 @@
   <header>
     <div class="logo">⚛</div>
     <h1>AI Frontend Generator</h1>
-    <span class="badge">Vite · React TSX · Claude Sonnet 4.6</span>
+    <span class="badge">esbuild · React TSX · Claude Sonnet 4.6</span>
   </header>
 
   <div class="layout">
@@ -253,12 +252,13 @@
         <button class="bar-btn tab-active" id="tab-preview" onclick="showTab('preview')">Preview</button>
         <button class="bar-btn" id="tab-code" onclick="showTab('code')">Source</button>
         <button class="bar-btn" id="open-tab-btn" onclick="openTab()" style="display:none">Open ↗</button>
+        <button class="bar-btn" id="deploy-btn" onclick="deployProject()" style="display:none;border-color:#16a34a;color:#4ade80">🚀 Deploy</button>
       </div>
 
       <div class="placeholder" id="placeholder">
         <div class="icon">⚛️</div>
-        <div>Your React app will run here</div>
-        <small>Each project gets its own Vite dev server</small>
+        <div>Your React app will appear here</div>
+        <small>Bundled by esbuild in ~2 seconds</small>
       </div>
       <iframe id="preview-frame" allow="cross-origin-isolated"></iframe>
       <div class="code-pane" id="code-pane">
@@ -322,10 +322,56 @@
       $('preview-frame').src = url;
       $('addr-bar').textContent = url;
       $('open-tab-btn').style.display = 'block';
+      $('deploy-btn').style.display = 'block';
       $('code-content').textContent = 'Select a file from the sidebar to view its source.';
       $('update-bar').style.display = 'flex';
       $('update-status').textContent = '';
       showTab('preview');
+    }
+
+    async function deployProject() {
+      if (!currentProject) return;
+      const btn = $('deploy-btn');
+      btn.disabled = true;
+      btn.textContent = '⏳ Deploying...';
+
+      try {
+        const response = await fetch(`/projects/${currentProject}/deploy`, { method: 'POST' });
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.status) { btn.textContent = `⏳ ${data.status}`; }
+              else if (data.done) {
+                btn.textContent = '✓ Deployed';
+                btn.disabled = false;
+                // Show deployed links
+                const msg = `Deployed!\n\nCloudflare: ${data.deployedUrl}\nGitHub: ${data.githubUrl}`;
+                if (confirm(msg + '\n\nOpen deployed URL?')) window.open(data.deployedUrl, '_blank');
+                loadProjects();
+              } else if (data.error) {
+                btn.textContent = '🚀 Deploy';
+                btn.disabled = false;
+                alert('Deploy failed: ' + data.error);
+              }
+            } catch {}
+          }
+        }
+      } catch (err) {
+        btn.textContent = '🚀 Deploy';
+        btn.disabled = false;
+        alert('Deploy failed: ' + err.message);
+      }
     }
 
     async function sendUpdate() {
@@ -364,7 +410,8 @@
                 setUpdateStatus(`✓ ${data.changed.length} file(s): ${data.changed.join(', ')}`, 'ok');
                 showTokens(data.tokens);
                 input.value = '';
-                setTimeout(() => { $('preview-frame').src = currentPreviewUrl; }, 600);
+                // esbuild already rebuilt — reload iframe to show new bundle
+                $('preview-frame').src = currentPreviewUrl + '?t=' + Date.now();
                 loadProjects();
               }
             } catch {}
@@ -484,26 +531,25 @@
       card.dataset.pid = proj.id;
       const ts = new Date(proj.createdAt).toLocaleTimeString();
 
-      const headerAction = proj.running
-        ? `<button class="stop-btn" onclick="stopProject(event,'${proj.id}')">✕ stop</button>`
-        : `<button class="start-btn" onclick="startProject(event,'${proj.id}')">▶ start</button>`;
+      const badge = proj.built
+        ? `<span class="built-badge">✓ built</span>`
+        : `<span class="building-badge">building…</span>`;
 
-      const portBadge = proj.running
-        ? `<span class="port-badge">:${proj.port}</span>`
-        : `<span class="port-badge stopped">stopped</span>`;
+      const deployedLink = proj.deployedUrl
+        ? `<a href="${proj.deployedUrl}" target="_blank" style="font-size:10px;color:#4ade80;text-decoration:none;margin-left:4px" title="Open deployed URL">↗ live</a>`
+        : '';
 
-      const headerClick = proj.running
+      const headerClick = proj.built
         ? `onclick="toggleCard('${proj.id}','${proj.previewUrl}')"`
         : '';
 
       card.innerHTML = `
         <div class="project-header" ${headerClick}>
-          ${portBadge}
-          <span class="project-name">${ts}</span>
-          ${headerAction}
+          ${badge}
+          <span class="project-name">${ts}${deployedLink}</span>
         </div>
         <div class="file-tree" id="tree-${proj.id}">
-          ${proj.files.map(f => `
+          ${(proj.files || []).map(f => `
             <div class="file-item" onclick="loadFileSource('${proj.id}','${f}')" title="${f}">
               <span class="file-icon">${fileIcon(f)}</span>${f}
             </div>`).join('')}
@@ -517,30 +563,6 @@
       document.querySelectorAll('.project-card').forEach(c => {
         c.classList.toggle('active', c.dataset.pid === projectId);
       });
-    }
-
-    async function startProject(e, projectId) {
-      e.stopPropagation();
-      const card = document.querySelector(`[data-pid="${projectId}"]`);
-      if (card) card.querySelector('.start-btn').textContent = '…';
-      try {
-        const data = await fetch(`/projects/${projectId}/start`, { method: 'POST' }).then(r => r.json());
-        if (data.error) { alert(data.error); return; }
-        await loadProjects();
-        loadPreview(data.previewUrl, projectId);
-      } catch (err) { alert('Start failed: ' + err.message); }
-    }
-
-    async function stopProject(e, projectId) {
-      e.stopPropagation();
-      await fetch(`/projects/${projectId}`, { method: 'DELETE' });
-      if (currentProject === projectId) {
-        $('placeholder').style.display = 'flex';
-        $('preview-frame').style.display = 'none';
-        $('open-tab-btn').style.display = 'none';
-        currentProject = null; currentPreviewUrl = null;
-      }
-      await loadProjects();
     }
 
     async function generate() {
@@ -576,7 +598,7 @@
               else if (data.status) { setStatus(data.status, 'loading'); }
               else if (data.done) {
                 setStatus(`Done! ${data.files.length} files generated`, 'ok');
-                renderProjectCard({ ...data, running: true }, true);
+                renderProjectCard({ ...data, built: true }, true);
                 loadPreview(data.previewUrl, data.projectId);
                 showTokens(data.tokens);
               }
