@@ -7,6 +7,8 @@ import { fileURLToPath } from 'url';
 import dotenv from 'dotenv';
 import { logAICall, logStep, getCallLog, ensureLogDir, LOG_FILE } from './logger.js';
 import { pushToGitHub, createGitHubRepo, deployToCloudflarePages } from './deployer.js';
+import { captureScreenshots } from './agents/ui-tester.js';
+import { analyzeUI } from './agents/ui-analyzer.js';
 
 dotenv.config();
 
@@ -25,11 +27,15 @@ const projects = new Map();
 const BASE_FILES = {
   'package.json': JSON.stringify({
     name: 'preview', private: true, version: '0.0.1', type: 'module',
-    scripts: { dev: 'vite', build: 'tsc -b && vite build' },
+    scripts: { dev: 'vite', build: 'tsc -b && vite build', test: 'vitest run' },
     dependencies: { react: '^18.3.1', 'react-dom': '^18.3.1' },
     devDependencies: {
       '@types/react': '^18.3.1', '@types/react-dom': '^18.3.1',
       '@vitejs/plugin-react': '^4.3.1', typescript: '^5.5.3', vite: '^5.4.1',
+      vitest: '^2.0.0', jsdom: '^24.0.0',
+      '@testing-library/react': '^16.0.0',
+      '@testing-library/jest-dom': '^6.4.0',
+      '@testing-library/user-event': '^14.5.0',
     },
   }, null, 2),
   'tsconfig.json': `{ "files": [], "references": [{ "path": "./tsconfig.app.json" }] }`,
@@ -60,11 +66,29 @@ createRoot(document.getElementById('root')!).render(
 `;
 const INDEX_CSS = `body { margin: 0; }\n`;
 
+const VITEST_CONFIG_TS = `import { defineConfig } from 'vitest/config'
+import react from '@vitejs/plugin-react'
+
+export default defineConfig({
+  plugins: [react()],
+  test: {
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    globals: true,
+    css: true,
+  },
+})
+`;
+
+const TEST_SETUP_TS = `import '@testing-library/jest-dom'\n`;
+
 // These are written from templates, never AI-generated. They still appear in the
 // manifest (marked do-not-edit) so the update flow knows they exist.
 const FIXED_FILES = {
   'src/main.tsx': MAIN_TSX,
   'src/index.css': INDEX_CSS,
+  'vitest.config.ts': VITEST_CONFIG_TS,
+  'src/test/setup.ts': TEST_SETUP_TS,
 };
 
 async function writeFixedFiles(projectDir) {
@@ -107,12 +131,23 @@ async function loadManifest(proj) {
 }
 
 async function ensureBase() {
-  const marker = path.join(BASE_DIR, 'node_modules', '.package-lock.json');
-  try { await fs.access(marker); return; } catch {}
-  console.log('[setup] Installing base Vite template (~30s, one-time)...');
-  await fs.mkdir(BASE_DIR, { recursive: true });
-  await Promise.all(Object.entries(BASE_FILES).map(([n, c]) => fs.writeFile(path.join(BASE_DIR, n), c, 'utf-8')));
-  // Minimal package.json for npm install
+  // Use vitest presence as the marker — if missing, we need to (re)install.
+  const vitestMarker = path.join(BASE_DIR, 'node_modules', 'vitest');
+  try { await fs.access(vitestMarker); return; } catch {}
+
+  const pkgLock = path.join(BASE_DIR, 'node_modules', '.package-lock.json');
+  let baseExists = false;
+  try { await fs.access(pkgLock); baseExists = true; } catch {}
+
+  if (!baseExists) {
+    console.log('[setup] Installing base Vite template (~60s, one-time)...');
+    await fs.mkdir(BASE_DIR, { recursive: true });
+    await Promise.all(Object.entries(BASE_FILES).map(([n, c]) => fs.writeFile(path.join(BASE_DIR, n), c, 'utf-8')));
+  } else {
+    console.log('[setup] Adding test dependencies to base (~30s)...');
+    await fs.writeFile(path.join(BASE_DIR, 'package.json'), BASE_FILES['package.json'], 'utf-8');
+  }
+
   await new Promise((resolve, reject) => {
     const proc = spawn(isWin ? 'npm.cmd' : 'npm', ['install'], { cwd: BASE_DIR, stdio: 'inherit', shell: isWin });
     proc.on('close', (code) => code === 0 ? resolve() : reject(new Error(`npm install failed: ${code}`)));
@@ -244,6 +279,7 @@ Files YOU must generate — ALL under src/ only:
   src/components/*.tsx      — Reusable UI components, one default export per file
   src/hooks/*.ts            — Custom hooks (only if genuinely needed)
   src/pages/*.tsx           — Page/view components (one per screen)
+  src/tests/*.test.tsx      — Vitest + React Testing Library tests for key components
 
 Rules:
   - Every file path MUST start with "src/" — never generate root-level config files
@@ -253,6 +289,11 @@ Rules:
   - Every interactive element actually works
   - Use React.FC<Props> with explicit prop types
   - Mock data lives only in data/mockData.ts
+  - Write tests in src/tests/ for 2-3 key components using Vitest + @testing-library/react
+  - In tests: import { describe, it, expect } from 'vitest' and { render, screen } from '@testing-library/react'
+  - Each test: render the component with minimal required props → assert visible text or elements
+  - Keep tests practical — 2-3 assertions per it(), 1-2 it() blocks per file
+  - Tests must NOT import mockData or rely on side-effects; pass data as props directly
   - For EACH file, provide a concise one-line "description" of what it contains/does.
     These descriptions become the project map used for future edits — make them
     specific (e.g. "TaskCard: renders one task with priority badge and assignee avatar").`;
@@ -321,6 +362,13 @@ app.use('/preview/:projectId/', (req, res, next) => {
   const proj = projects.get(req.params.projectId);
   if (!proj?.built) return res.status(404).send('Project not built yet.');
   express.static(path.join(proj.dir, 'dist'))(req, res, next);
+});
+
+// Serve Playwright screenshots for each project
+app.use('/screenshots/:projectId/', (req, res, next) => {
+  const proj = projects.get(req.params.projectId);
+  if (!proj) return res.status(404).send('Project not found.');
+  express.static(path.join(proj.dir, 'screenshots'))(req, res, next);
 });
 
 app.post('/generate', async (req, res) => {
@@ -718,6 +766,107 @@ app.post('/projects/:id/deploy', async (req, res) => {
   } catch (err) {
     console.error('[deploy] error:', err);
     send({ error: err.message || 'Deploy failed.' });
+    res.end();
+  }
+});
+
+// ─── Test runner ──────────────────────────────────────────────────────────────
+// Runs vitest in the project directory and streams JSON results back.
+
+app.post('/projects/:id/test', async (req, res) => {
+  const proj = projects.get(req.params.id);
+  if (!proj) return res.status(404).json({ error: 'Project not found.' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  send({ status: 'Running tests…' });
+
+  try {
+    await ensureJunction(proj.dir);
+    const vitestBin = path.join(BASE_DIR, 'node_modules', '.bin', isWin ? 'vitest.cmd' : 'vitest');
+
+    let stdout = '';
+    let stderr = '';
+
+    const proc = spawn(vitestBin, ['run', '--reporter=json'], {
+      cwd: proj.dir,
+      env: { ...process.env, NODE_ENV: 'test', FORCE_COLOR: '0' },
+    });
+
+    proc.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    proc.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+
+    proc.on('close', (code) => {
+      // vitest --reporter=json emits JSON to stdout; find the JSON object start.
+      const jsonStart = stdout.indexOf('{');
+      const jsonStr   = jsonStart >= 0 ? stdout.slice(jsonStart) : '';
+      try {
+        const results = JSON.parse(jsonStr);
+        send({ done: true, results, exitCode: code });
+      } catch {
+        send({ done: true, raw: (stdout + '\n' + stderr).trim(), exitCode: code, parseError: true });
+      }
+      res.end();
+    });
+
+    proc.on('error', (err) => {
+      send({ error: `Could not start vitest: ${err.message}` });
+      res.end();
+    });
+  } catch (err) {
+    send({ error: err.message });
+    res.end();
+  }
+});
+
+// ─── UI Screenshot + Analysis ─────────────────────────────────────────────────
+// Agent Step 1 (ui-tester.js)  : headless Playwright captures desktop/tablet/mobile screenshots
+// Agent Step 2 (ui-analyzer.js): Claude Vision scores layout, responsiveness, and UX issues
+
+app.post('/projects/:id/ui-test', async (req, res) => {
+  const proj = projects.get(req.params.id);
+  if (!proj) return res.status(404).json({ error: 'Project not found.' });
+  if (!proj.built) return res.status(400).json({ error: 'Build the preview first.' });
+
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  const send = (data) => res.write(`data: ${JSON.stringify(data)}\n\n`);
+
+  try {
+    // ── Step 1: capture screenshots ──────────────────────────────────────────
+    send({ status: 'Launching headless browser (desktop + tablet + mobile)...' });
+    const previewUrl = `http://localhost:${PORT}/preview/${req.params.id}/`;
+    const screenshotsDir = path.join(proj.dir, 'screenshots');
+    const screenshots = await captureScreenshots(previewUrl, screenshotsDir);
+
+    send({ status: `${screenshots.length} screenshots captured. Sending to Claude Vision for analysis...` });
+
+    // ── Step 2: Claude Vision analysis ──────────────────────────────────────
+    const { analysis, usage } = await analyzeUI(screenshots, client);
+    accumulate(usage);
+
+    // Public URLs the frontend can use to display the screenshots
+    const screenshotUrls = screenshots.map((s) => ({
+      viewport: s.viewport,
+      width: s.width,
+      height: s.height,
+      url: `/screenshots/${req.params.id}/${s.viewport}.png`,
+    }));
+
+    send({
+      done: true,
+      analysis,
+      screenshots: screenshotUrls,
+      tokens: { ...fmtUsage(usage), session: sessionSnapshot() },
+    });
+    res.end();
+  } catch (err) {
+    console.error('[ui-test] error:', err);
+    send({ error: err.message || 'UI test failed.' });
     res.end();
   }
 });

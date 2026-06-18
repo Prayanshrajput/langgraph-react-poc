@@ -201,6 +201,55 @@
     .tstat.cost { color: #34d399; }
     .tstat.time { color: #fb923c; }
     .tstat.sess { color: #94a3b8; }
+
+    /* ── Test pane ── */
+    .test-pane { flex: 1; overflow: auto; display: none; background: #0d1018; padding: 16px; }
+
+    /* ── UI Test pane ── */
+    .ui-test-pane { flex: 1; overflow: auto; display: none; background: #0d1018; padding: 16px; }
+    .screenshot-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 16px; }
+    .screenshot-card { background: #1a1f2e; border: 1px solid #2d3448; border-radius: 8px; overflow: hidden; }
+    .screenshot-label { padding: 6px 10px; font-size: 10.5px; font-weight: 600; color: #64748b; text-transform: uppercase; letter-spacing: .06em; border-bottom: 1px solid #2d3448; display: flex; align-items: center; justify-content: space-between; }
+    .screenshot-label a { color: #818cf8; text-decoration: none; font-size: 10px; }
+    .screenshot-label a:hover { text-decoration: underline; }
+    .screenshot-img { width: 100%; display: block; }
+    .analysis-block { background: #1a1f2e; border: 1px solid #2d3448; border-radius: 8px; padding: 14px; margin-bottom: 12px; }
+    .analysis-title { font-size: 10.5px; font-weight: 600; color: #475569; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 10px; }
+    .score-row { display: flex; align-items: center; gap: 12px; }
+    .score-num { font-size: 28px; font-weight: 700; line-height: 1; }
+    .score-summary { font-size: 13px; color: #94a3b8; line-height: 1.6; }
+    .issue-item { padding: 8px 0; border-bottom: 1px solid #1e2433; display: flex; gap: 8px; align-items: flex-start; }
+    .issue-item:last-child { border-bottom: none; }
+    .sev-badge { font-size: 9.5px; font-weight: 700; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; flex-shrink: 0; margin-top: 1px; }
+    .sev-high   { background: #3f0e0e; color: #f87171; }
+    .sev-medium { background: #2d2007; color: #fb923c; }
+    .sev-low    { background: #0d1a0f; color: #86efac; }
+    .issue-body { font-size: 12px; }
+    .issue-desc { color: #cbd5e1; margin-bottom: 3px; }
+    .issue-fix  { color: #64748b; font-size: 11.5px; }
+    .vp-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+    .vp-card { background: #0d1018; border: 1px solid #2d3448; border-radius: 6px; padding: 10px; }
+    .vp-name   { font-size: 10px; font-weight: 600; color: #818cf8; text-transform: uppercase; letter-spacing: .06em; margin-bottom: 4px; }
+    .vp-rating { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+    .vp-notes  { font-size: 11.5px; color: #64748b; line-height: 1.5; }
+    .test-summary {
+      font-size: 13px; font-weight: 600; padding: 8px 0 14px;
+      border-bottom: 1px solid #1e2433; margin-bottom: 14px;
+    }
+    .test-suite { margin-bottom: 16px; }
+    .test-suite-name {
+      font-size: 11px; font-weight: 600; color: #64748b;
+      margin-bottom: 6px; font-family: 'JetBrains Mono', monospace;
+      text-transform: uppercase; letter-spacing: .04em;
+    }
+    .test-case {
+      display: flex; flex-direction: column;
+      padding: 3px 0 3px 12px; font-size: 12px; font-family: 'JetBrains Mono', monospace;
+    }
+    .test-pass { color: #4ade80; }
+    .test-fail { color: #f87171; }
+    .test-err-msg { font-size: 10.5px; color: #f87171; margin-top: 2px; padding-left: 14px; opacity: .85; white-space: pre-wrap; word-break: break-all; }
+    .test-raw { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: #94a3b8; white-space: pre-wrap; word-break: break-all; }
   </style>
 </head>
 <body>
@@ -251,6 +300,8 @@
         <div class="addr-bar" id="addr-bar">about:blank</div>
         <button class="bar-btn tab-active" id="tab-preview" onclick="showTab('preview')">Preview</button>
         <button class="bar-btn" id="tab-code" onclick="showTab('code')">Source</button>
+        <button class="bar-btn" id="tab-test" onclick="showTab('test')" style="display:none">Tests</button>
+        <button class="bar-btn" id="tab-ui-test" onclick="showTab('ui-test')" style="display:none">UI Test</button>
         <button class="bar-btn" id="open-tab-btn" onclick="openTab()" style="display:none">Open ↗</button>
         <button class="bar-btn" id="deploy-btn" onclick="deployProject()" style="display:none;border-color:#16a34a;color:#4ade80">🚀 Deploy</button>
       </div>
@@ -263,6 +314,12 @@
       <iframe id="preview-frame" allow="cross-origin-isolated"></iframe>
       <div class="code-pane" id="code-pane">
         <pre id="code-content">Select a file from the sidebar to view its source.</pre>
+      </div>
+      <div class="test-pane" id="test-pane">
+        <div id="test-content" style="color:#64748b;font-size:13px;padding:12px 0">Click the Tests tab to run tests.</div>
+      </div>
+      <div class="ui-test-pane" id="ui-test-pane">
+        <div id="ui-test-content" style="color:#64748b;font-size:13px;padding:12px 0">Click the UI Test tab to capture screenshots and analyze the UI.</div>
       </div>
 
       <!-- ── Token stats ── -->
@@ -295,19 +352,16 @@
     }
 
     function showTab(tab) {
-      const frame = $('preview-frame');
-      const code  = $('code-pane');
-      if (tab === 'preview') {
-        frame.style.display = 'block';
-        code.style.display  = 'none';
-        $('tab-preview').classList.add('tab-active');
-        $('tab-code').classList.remove('tab-active');
-      } else {
-        frame.style.display = 'none';
-        code.style.display  = 'block';
-        $('tab-preview').classList.remove('tab-active');
-        $('tab-code').classList.add('tab-active');
-      }
+      $('preview-frame').style.display  = tab === 'preview' ? 'block' : 'none';
+      $('code-pane').style.display      = tab === 'code'    ? 'block' : 'none';
+      $('test-pane').style.display      = tab === 'test'    ? 'block' : 'none';
+      $('ui-test-pane').style.display   = tab === 'ui-test' ? 'block' : 'none';
+      ['preview', 'code', 'test', 'ui-test'].forEach(t => {
+        const el = $('tab-' + t);
+        if (el) el.classList.toggle('tab-active', t === tab);
+      });
+      if (tab === 'test'    && currentProject) runTests();
+      if (tab === 'ui-test' && currentProject) runUITest();
     }
 
     function openTab() {
@@ -323,6 +377,8 @@
       $('addr-bar').textContent = url;
       $('open-tab-btn').style.display = 'block';
       $('deploy-btn').style.display = 'block';
+      $('tab-test').style.display = 'block';
+      $('tab-ui-test').style.display = 'block';
       $('code-content').textContent = 'Select a file from the sidebar to view its source.';
       $('update-bar').style.display = 'flex';
       $('update-status').textContent = '';
@@ -495,6 +551,87 @@
       panel.className = 'token-panel visible';
     }
 
+    let testRunning = false;
+
+    async function runTests() {
+      if (!currentProject || testRunning) return;
+      testRunning = true;
+      const content = $('test-content');
+      content.innerHTML = '<div style="display:flex;align-items:center;gap:8px;color:#94a3b8;font-size:13px;padding:12px 0"><div class="spinner"></div>Running tests…</div>';
+
+      try {
+        const response = await fetch(`/projects/${currentProject}/test`, { method: 'POST' });
+        const reader   = response.body.getReader();
+        const decoder  = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.status) {
+                content.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:#94a3b8;font-size:13px;padding:12px 0"><div class="spinner"></div>${data.status}</div>`;
+              } else if (data.done) {
+                renderTestResults(data, content);
+              } else if (data.error) {
+                content.innerHTML = `<div style="color:#f87171;font-size:13px;padding:12px 0">✗ ${data.error}</div>`;
+              }
+            } catch {}
+          }
+        }
+      } catch (err) {
+        content.innerHTML = `<div style="color:#f87171;font-size:13px;padding:12px 0">✗ ${err.message}</div>`;
+      } finally {
+        testRunning = false;
+      }
+    }
+
+    function renderTestResults(data, content) {
+      if (data.parseError || !data.results) {
+        const ok = data.exitCode === 0;
+        content.innerHTML = `
+          <div class="test-summary" style="color:${ok ? '#4ade80' : '#f87171'}">${ok ? '✓ All tests passed' : '✗ Tests failed'}</div>
+          <pre class="test-raw">${(data.raw || '').replace(/</g,'&lt;')}</pre>`;
+        return;
+      }
+
+      const r      = data.results;
+      const total  = r.numTotalTests  || 0;
+      const passed = r.numPassedTests || 0;
+      const failed = r.numFailedTests || 0;
+      const color  = failed > 0 ? '#f87171' : '#4ade80';
+      const icon   = failed > 0 ? '✗' : '✓';
+
+      let html = `<div class="test-summary" style="color:${color}">
+        ${icon} ${passed}/${total} passed${failed > 0 ? ` &nbsp;·&nbsp; <span style="color:#f87171">${failed} failed</span>` : ''}
+        <button onclick="runTests()" style="float:right;font-size:11px;background:none;border:1px solid #334155;color:#64748b;padding:2px 8px;border-radius:4px;cursor:pointer">Re-run</button>
+      </div>`;
+
+      for (const suite of (r.testResults || [])) {
+        const name = suite.testFilePath.replace(/.*\/src\//, 'src/');
+        html += `<div class="test-suite"><div class="test-suite-name">${name}</div>`;
+        for (const t of (suite.testResults || [])) {
+          const ok  = t.status === 'passed';
+          const err = (!ok && t.failureMessages?.length)
+            ? t.failureMessages[0].split('\n').slice(0, 3).join('\n')
+            : '';
+          html += `<div class="test-case ${ok ? 'test-pass' : 'test-fail'}">
+            <span>${ok ? '✓' : '✗'} ${(t.fullName || t.title || '').replace(/</g,'&lt;')}</span>
+            ${err ? `<div class="test-err-msg">${err.replace(/</g,'&lt;')}</div>` : ''}
+          </div>`;
+        }
+        html += '</div>';
+      }
+
+      content.innerHTML = html;
+    }
+
     async function loadFileSource(projectId, filePath) {
       $('code-content').textContent = 'Loading...';
       showTab('code');
@@ -610,6 +747,121 @@
       } finally {
         btn.disabled = false;
       }
+    }
+
+    let uiTestRunning = false;
+
+    async function runUITest() {
+      if (!currentProject || uiTestRunning) return;
+      uiTestRunning = true;
+      const content = $('ui-test-content');
+      content.innerHTML = '<div style="display:flex;align-items:center;gap:8px;color:#94a3b8;font-size:13px;padding:12px 0"><div class="spinner"></div>Launching headless browser…</div>';
+
+      try {
+        const response = await fetch(`/projects/${currentProject}/ui-test`, { method: 'POST' });
+        const reader   = response.body.getReader();
+        const decoder  = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop();
+          for (const line of lines) {
+            if (!line.startsWith('data: ')) continue;
+            try {
+              const data = JSON.parse(line.slice(6));
+              if (data.status) {
+                content.innerHTML = `<div style="display:flex;align-items:center;gap:8px;color:#94a3b8;font-size:13px;padding:12px 0"><div class="spinner"></div>${data.status}</div>`;
+              } else if (data.done) {
+                renderUITestResults(data, content);
+              } else if (data.error) {
+                content.innerHTML = `<div style="color:#f87171;font-size:13px;padding:12px 0">✗ ${data.error}</div>`;
+              }
+            } catch {}
+          }
+        }
+      } catch (err) {
+        content.innerHTML = `<div style="color:#f87171;font-size:13px;padding:12px 0">✗ ${err.message}</div>`;
+      } finally {
+        uiTestRunning = false;
+      }
+    }
+
+    function scoreColor(s) {
+      if (s >= 8) return '#4ade80';
+      if (s >= 6) return '#fb923c';
+      return '#f87171';
+    }
+
+    function renderUITestResults(data, content) {
+      const { analysis, screenshots } = data;
+      const sc = scoreColor(analysis.score);
+
+      // Screenshots row
+      let html = `<div class="screenshot-grid">`;
+      for (const s of screenshots) {
+        html += `
+          <div class="screenshot-card">
+            <div class="screenshot-label">
+              ${s.viewport} <span>${s.width}×${s.height}</span>
+              <a href="${s.url}" target="_blank">full ↗</a>
+            </div>
+            <img class="screenshot-img" src="${s.url}?t=${Date.now()}" alt="${s.viewport}" loading="lazy" />
+          </div>`;
+      }
+      html += `</div>`;
+
+      // Score + summary
+      html += `
+        <div class="analysis-block">
+          <div class="analysis-title">Overall</div>
+          <div class="score-row">
+            <div class="score-num" style="color:${sc}">${analysis.score}<span style="font-size:14px;color:#475569">/10</span></div>
+            <div class="score-summary">${analysis.renders ? '' : '<span style="color:#f87171;font-weight:600">⚠ Page did not render correctly. </span>'}${analysis.summary}</div>
+          </div>
+        </div>`;
+
+      // Issues
+      if (analysis.issues && analysis.issues.length > 0) {
+        html += `<div class="analysis-block"><div class="analysis-title">Issues (${analysis.issues.length})</div>`;
+        for (const issue of analysis.issues) {
+          const sevClass = `sev-${issue.severity}`;
+          html += `
+            <div class="issue-item">
+              <span class="sev-badge ${sevClass}">${issue.severity}</span>
+              <div class="issue-body">
+                <div class="issue-desc">${issue.description} <span style="color:#475569;font-size:11px">[${issue.viewport}]</span></div>
+                <div class="issue-fix">→ ${issue.suggestion}</div>
+              </div>
+            </div>`;
+        }
+        html += `</div>`;
+      } else {
+        html += `<div class="analysis-block" style="color:#4ade80;font-size:13px">✓ No issues found</div>`;
+      }
+
+      // Per-viewport breakdown
+      if (analysis.per_viewport) {
+        html += `<div class="analysis-block"><div class="analysis-title">Per-viewport breakdown</div><div class="vp-grid">`;
+        for (const [vp, info] of Object.entries(analysis.per_viewport)) {
+          const c = scoreColor(info.rating);
+          html += `
+            <div class="vp-card">
+              <div class="vp-name">${vp}</div>
+              <div class="vp-rating" style="color:${c}">${info.rating}/10</div>
+              <div class="vp-notes">${info.notes}</div>
+            </div>`;
+        }
+        html += `</div></div>`;
+      }
+
+      // Re-run button
+      html += `<button onclick="uiTestRunning=false;runUITest()" style="font-size:11px;background:none;border:1px solid #334155;color:#64748b;padding:4px 12px;border-radius:4px;cursor:pointer;margin-top:4px">Re-run UI Test</button>`;
+
+      content.innerHTML = html;
     }
 
     async function loadProjects() {
